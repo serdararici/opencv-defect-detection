@@ -36,11 +36,6 @@ TOPHAT_THRESHOLD    = 18         # pixel threshold after top-hat / black-hat
 NOISE_MIN_AREA      = 60         # blobs smaller than this are noise (px)
 CLOSING_KERNEL      = 9          # closing kernel to smooth predicted mask
 
-# ── Hough line parameters (scratch detection)
-HOUGH_THRESHOLD     = 18
-HOUGH_MIN_LINE_LEN  = 25
-HOUGH_MAX_LINE_GAP  = 18
-HOUGH_LINE_SCORE    = 125        # minimum score to classify as scratch
 
 # ── Random Forest parameters
 RF_N_ESTIMATORS = 200
