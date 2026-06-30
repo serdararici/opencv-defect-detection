@@ -5,6 +5,8 @@
 # ─────────────────────────────────────────────
 
 import os
+import cv2
+import numpy as np
 
 # ── Project root: two levels up from this file (src/ → defect_detection/ → Proje/)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,3 +61,14 @@ if __name__ == "__main__":
     print("TEST_DIR     :", TEST_DIR,  "→ exists:", os.path.isdir(TEST_DIR))
     print("OUTPUT_DIR   :", OUTPUT_DIR,"→ exists:", os.path.isdir(OUTPUT_DIR))
     print("CLASSES      :", CLASSES)
+
+def imread_unicode(path):
+    """
+    Read an image from a path that may contain non-ASCII characters
+    (Turkish characters like İ, ş, ğ break cv2.imread on Windows).
+
+    Uses numpy + cv2.imdecode as a workaround.
+    """
+    data = np.fromfile(path, dtype=np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    return img
