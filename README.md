@@ -29,6 +29,9 @@ Given a single 256×256 product image, the system predicts:
 ![Segmentation test](outputs/segmentation_test.png)
 *Raw defect segmentation output before bbox correction.*
 
+![Shrink correction](outputs/shrink_comparison.png)
+*Raw prediction (red, dashed) vs ground truth (green) vs shrink-corrected prediction (cyan).*
+
 ![Confusion matrix](outputs/confusion_matrix.png)
 *Validation set confusion matrix.*
 
