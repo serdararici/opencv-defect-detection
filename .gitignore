@@ -1,0 +1,5 @@
+outputs/model.pkl
+outputs/*.csv
+__pycache__/
+*.pyc
+.venv/
