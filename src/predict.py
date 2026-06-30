@@ -1,10 +1,22 @@
 # src/predict.py
 # ─────────────────────────────────────────────
 # Prediction pipeline.
-# Loads the trained model, learns per-class bounding box calibration stats
+# Loads the trained model, learns a per-class bounding box shrink factor
 # from the train set, then runs the full pipeline on any image folder
 # to produce a submission.csv file. If ground-truth labels are available
 # for the target folder, also computes and prints the evaluation score.
+#
+# Bbox strategy: generic segmentation (segment_defect) + learned shrink
+# correction is used for ALL classes. Class-specific detectors (Hough
+# lines for scratch, LAB color deviation for stain, convex hull for edge
+# defects) were tested but performed worse on validation:
+#
+#     Class          | Specific detector | Generic + shrink
+#     scratch        | 0.164 (Hough)      | 0.356
+#     missing_part   | 0.759 (hull)       | 0.783
+#     deformation    | 0.000 (hull)       | 0.816
+#
+# Generic + shrink wins across the board, so it is used uniformly.
 #
 # Usage:
 #     python -m src.predict
@@ -24,12 +36,7 @@ from .config import (
     imread_unicode,
 )
 from .features import extract_features
-from .segmentation import (
-    segment_defect,
-    detect_scratch,
-    detect_stain,
-    detect_edge_defect,
-)
+from .segmentation import segment_defect
 from .train import load_labels, compute_iou
 
 
@@ -46,8 +53,12 @@ def shrink_box(box, fx, fy):
 def learn_shrink_factors(train_rows):
     """
     Compare raw segmentation bbox size to ground-truth bbox size per class,
-    and compute the average correction ratio (used as a fallback when no
-    class-specific detector is used).
+    and compute the average correction ratio needed to shrink predicted
+    boxes down to realistic size.
+
+    Segmentation tends to systematically over-estimate defect size (it
+    includes blurry transition pixels around the true defect edge). This
+    factor corrects that bias using the train set as calibration data.
 
     Returns:
         dict: {class_name: (width_factor, height_factor)}
@@ -79,58 +90,32 @@ def learn_shrink_factors(train_rows):
     }
 
 
-def learn_median_bbox_sizes(rows):
-    """
-    Compute median (width, height) per class from ground-truth boxes.
-    Used by class-specific detectors that place a fixed-size box around
-    a detected center point.
-
-    Returns:
-        dict: {class_name: {"w": float, "h": float}}
-    """
-    sizes = {}
-    for row in rows:
-        cls = row["class_name"]
-        if cls == "normal":
-            continue
-        w = int(row["x2"]) - int(row["x1"])
-        h = int(row["y2"]) - int(row["y1"])
-        sizes.setdefault(cls, []).append((w, h))
-
-    return {
-        cls: {"w": float(np.median([v[0] for v in vals])),
-              "h": float(np.median([v[1] for v in vals]))}
-        for cls, vals in sizes.items()
-    }
-
-
-def get_bbox_for_class(img, pred_class, median_stats, shrink_factors):
+def get_bbox_for_class(img, pred_class, shrink_factors):
     """
     Get the final bounding box for a classified image.
 
-    Uses class-specific detectors where they are reliable (scratch, stain,
-    missing_part). Falls back to generic segmentation + learned shrink
-    correction for deformation, since the convex-hull detector proved
-    unreliable for small edge bumps (tested IoU = 0.0 on validation).
+    Uses generic segmentation + learned shrink correction for every class.
+    See module docstring for why this beats class-specific detectors.
+
+    Args:
+        img            : BGR image
+        pred_class     : predicted class name
+        shrink_factors : dict from learn_shrink_factors()
+
+    Returns:
+        (x1, y1, x2, y2)
     """
     if pred_class == "normal":
         return (0, 0, 0, 0)
 
-    if pred_class == "scratch":
-        return detect_scratch(img, median_stats)
-    if pred_class == "stain":
-        return detect_stain(img, median_stats)
-    if pred_class == "missing_part":
-        return detect_edge_defect(img, median_stats, pred_class)
-
-    # deformation (and any unhandled class): generic segmentation + shrink
     _, pred_box = segment_defect(img)
     if pred_box != (0, 0, 0, 0) and pred_class in shrink_factors:
         fx, fy = shrink_factors[pred_class]
         pred_box = shrink_box(pred_box, fx, fy)
     return pred_box
 
-def generate_submission(img_dir, output_csv_path, clf, median_stats, shrink_factors):
+
+def generate_submission(img_dir, output_csv_path, clf, shrink_factors):
     """
     Run the full pipeline (classify + locate) on every image in
     img_dir/images/ and write a submission.csv file.
@@ -146,10 +131,12 @@ def generate_submission(img_dir, output_csv_path, clf, median_stats, shrink_fact
         image_id = os.path.basename(img_path)
         img = imread_unicode(img_path)
 
+        # Step 1: classify using the trained Random Forest
         feats = extract_features(img)
         pred_class = clf.predict([feats])[0]
 
-        x1, y1, x2, y2 = get_bbox_for_class(img, pred_class, median_stats, shrink_factors)
+        # Step 2: locate the defect using generic segmentation + shrink
+        x1, y1, x2, y2 = get_bbox_for_class(img, pred_class, shrink_factors)
 
         rows.append({
             "image_id": image_id,
@@ -231,17 +218,10 @@ def main():
     print("Model loaded.")
 
     print("\n" + "=" * 60)
-    print("Learning calibration stats from train set")
+    print("Learning bbox shrink factors from train set")
     print("=" * 60)
     train_rows = load_labels(f"{TRAIN_DIR}/labels.csv")
-
-    median_stats = learn_median_bbox_sizes(train_rows)
-    print("Median bbox sizes per class:")
-    for cls, s in median_stats.items():
-        print(f"  {cls:15s}: w={s['w']:.1f}, h={s['h']:.1f}")
-
     shrink_factors = learn_shrink_factors(train_rows)
-    print("\nShrink factors (fallback only):")
     for cls, (fw, fh) in shrink_factors.items():
         print(f"  {cls:15s}: width={fw:.3f}, height={fh:.3f}")
 
@@ -249,7 +229,7 @@ def main():
     print("Generating submission for test_hidden")
     print("=" * 60)
     submission_path = f"{OUTPUT_DIR}/submission.csv"
-    rows = generate_submission(TEST_DIR, submission_path, clf, median_stats, shrink_factors)
+    rows = generate_submission(TEST_DIR, submission_path, clf, shrink_factors)
 
     print("\n" + "=" * 60)
     print("Evaluating against ground truth (if available)")
