@@ -67,3 +67,13 @@ def imread_unicode(path):
     data = np.fromfile(path, dtype=np.uint8)
     img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     return img
+
+def imread_unicode_gray(path):
+    """
+    Read a grayscale image from a path that may contain non-ASCII characters.
+    Same Unicode workaround as imread_unicode, but for single-channel images
+    like defect masks.
+    """
+    data = np.fromfile(path, dtype=np.uint8)
+    img = cv2.imdecode(data, cv2.IMREAD_GRAYSCALE)
+    return img
